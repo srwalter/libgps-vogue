@@ -55,7 +55,7 @@ static void send_position_data (struct gps_state data)
     if (data.lat == last_lat && data.lng == last_lng)
         return;
 
-    system("echo lock > /tmp/gps");
+    system("echo lock >> /tmp/gps");
 
     last_lat = data.lat;
     last_lng = data.lng;
@@ -72,12 +72,15 @@ static void *vogue_gps_thread (void *arg)
 {
     (void)arg;
 
+    system("echo thread 1 >> /tmp/gps");
+
     /* Wait until we're signalled to start */
     pthread_mutex_lock(&thread_mutex);
 restart:
     while (!thread_running) {
         pthread_cond_wait(&thread_wq, &thread_mutex);
     }
+    system("echo thread 2 >> /tmp/gps");
 
     /* 2 means we should quit */
     if (thread_running == 2) {
@@ -86,38 +89,68 @@ restart:
     }
     pthread_mutex_unlock(&thread_mutex);
 
+    system("echo thread 3 >> /tmp/gps");
+
     for (;;) {
         struct gps_state data;
-        struct timeval tv;
+        struct timeval select_tv, before_tv, after_tv;
         fd_set set, empty;
         int rc;
+        int msec_to_next_fix = fix_freq;
 
-        tv.tv_sec = fix_freq / 1000 + 1;
-        FD_ZERO(&set);
-        FD_ZERO(&empty);
-        FD_SET(gps_fd, &set);
-        rc = select(gps_fd+1, &set, &empty, &empty, &tv);
+        do {
+            int msec_elapsed;
 
-        pthread_mutex_lock(&thread_mutex);
-        if (thread_running != 1)
-            goto restart;
-        pthread_mutex_unlock(&thread_mutex);
+            select_tv.tv_sec = msec_to_next_fix / 1000;
+            select_tv.tv_usec = (msec_to_next_fix % 1000) / 1000;
+
+            FD_ZERO(&set);
+            FD_ZERO(&empty);
+            FD_SET(gps_fd, &set);
+
+            gettimeofday(&before_tv, NULL);
+            rc = select(gps_fd+1, &set, &empty, &empty, &select_tv);
+            gettimeofday(&after_tv, NULL);
+
+            /* If we got woken up early by a signal, we want to decrease our
+            next timeout by the appropriate amount so we don't keep the
+            framework waiting for a fix */
+            msec_elapsed = (after_tv.tv_sec - before_tv.tv_sec) * 1000;
+            msec_elapsed += (after_tv.tv_usec - before_tv.tv_usec) / 1000;
+            msec_to_next_fix -= msec_elapsed;
+
+            pthread_mutex_lock(&thread_mutex);
+            if (thread_running != 1)
+                goto restart;
+            pthread_mutex_unlock(&thread_mutex);
+        } while (rc < 0 && errno == EINTR);
+
+        if (rc < 0) {
+            system("echo select error >> /tmp/gps");
+            perror("select");
+            continue;
+        }
 
         if (!rc) {
             /* fix_freq has elapsed with no data from the GPS.  better tell it
              * explicitly that we want a new fix */
+            system("echo select timeout >> /tmp/gps");
             ioctl(gps_fd, VGPS_IOC_NEW_FIX);
             continue;
         }
 
-        system("echo thread 1 >> /tmp/gps");
+        system("echo thread 6 >> /tmp/gps");
 
         do {
             rc = read(gps_fd, &data, sizeof(struct gps_state));
         } while (rc < 0 && errno == EINTR);
-        assert(rc == 0);
 
-        system("echo thread 2 >> /tmp/gps");
+        if (rc < 0) {
+            system("echo read error >> /tmp/gps");
+            perror("read");
+        }
+
+        system("echo thread 7 >> /tmp/gps");
 
         send_signal_data(data);
         send_position_data(data);
@@ -148,13 +181,20 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
 
 static int vogue_gps_start (void)
 {
-    system("echo start >> /tmp/gps");
-    ioctl(gps_fd, VGPS_IOC_ENABLE);
+    int rc;
 
-    pthread_mutex_lock(&thread_mutex);
-    thread_running = 1;
-    pthread_cond_broadcast(&thread_wq);
-    pthread_mutex_unlock(&thread_mutex);
+    system("echo start >> /tmp/gps");
+    if (!thread_running) {
+        rc = ioctl(gps_fd, VGPS_IOC_ENABLE);
+        if (rc < 0)
+            return rc;
+
+        system("echo start 1 >> /tmp/gps");
+        pthread_mutex_lock(&thread_mutex);
+        thread_running = 1;
+        pthread_cond_broadcast(&thread_wq);
+        pthread_mutex_unlock(&thread_mutex);
+    }
     return 0;
 }
 
@@ -172,6 +212,8 @@ static int vogue_gps_stop (void)
 
 static void vogue_gps_set_freq (int freq)
 {
+    if (freq < 10000)
+        freq = 10000;
     fix_freq = freq;
 }
 
@@ -182,6 +224,7 @@ static void vogue_gps_cleanup (void)
     thread_running = 2;
     pthread_cond_broadcast(&thread_wq);
     pthread_mutex_unlock(&thread_mutex);
+    close(gps_fd);
 }
 
 static int vogue_gps_inject (GpsUtcTime time, int64_t time_ref, int uncert)
