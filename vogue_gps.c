@@ -1,57 +1,126 @@
 
 #include <pthread.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <sys/select.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <assert.h>
 #include "gps.h"
+#include "vogue_gps.h"
+
+#define VOGUE_GPS_DEVICE "/dev/vogue_gps"
 
 static GpsCallbacks vogue_callbacks;
 static pthread_t gps_thread;
-static int thread_running;
+int gps_fd;
 
-static void writesys(char *name, char *val) {
-	FILE *fout;
-	fout=fopen(name,"w");
-	if(!fout) return;
-	fprintf(fout,val);
-	fclose(fout);
+static pthread_mutex_t thread_mutex;
+static int thread_running;
+static pthread_cond_t thread_wq;
+static int fix_freq = 60000;
+
+static void send_signal_data (struct gps_state data)
+{
+    GpsStatus status;
+    GpsSvStatus sv_info;
+    int i;
+
+    status.status = GPS_STATUS_SESSION_BEGIN;
+    vogue_callbacks.status_cb(&status);
+
+    sv_info.num_svs = 0;
+    for (i=0; i<MAX_SATELLITES; i++) {
+        if (!data.sat_state[i].sat_no)
+            break;
+
+        sv_info.num_svs++;
+        sv_info.sv_list[i].prn = data.sat_state[i].sat_no;
+        sv_info.sv_list[i].snr
+            = (double)data.sat_state[i].signal_strength / 256.0;
+    }
+
+    vogue_callbacks.sv_status_cb(&sv_info);
+}
+
+static void send_position_data (struct gps_state data)
+{
+    static uint32_t last_lat, last_lng;
+    GpsLocation location;
+
+    /* If the position hasn't changed, the kernel was probably just alerting us
+     * to new signal data */
+    if (data.lat == last_lat && data.lng == last_lng)
+        return;
+
+    system("echo lock > /tmp/gps");
+
+    last_lat = data.lat;
+    last_lng = data.lng;
+
+    memset(&location, 0, sizeof(location));
+    location.flags |= GPS_LOCATION_HAS_LAT_LONG;
+    location.latitude = (double)data.lat / 180000.0;
+    location.longitude = (double)data.lng / 180000.0;
+
+    vogue_callbacks.location_cb(&location);
 }
 
 static void *vogue_gps_thread (void *arg)
 {
     (void)arg;
 
+    /* Wait until we're signalled to start */
+    pthread_mutex_lock(&thread_mutex);
+restart:
+    while (!thread_running) {
+        pthread_cond_wait(&thread_wq, &thread_mutex);
+    }
+
+    /* 2 means we should quit */
+    if (thread_running == 2) {
+        pthread_mutex_unlock(&thread_mutex);
+        return NULL;
+    }
+    pthread_mutex_unlock(&thread_mutex);
+
     for (;;) {
+        struct gps_state data;
         struct timeval tv;
-        GpsLocation location;
-        char buf[256];
-        FILE *pos;
-        uint32_t lat, lng;
+        fd_set set, empty;
+        int rc;
 
-        tv.tv_sec = 5;
-        select(0, NULL, NULL, NULL, &tv);
-        if (!thread_running)
+        tv.tv_sec = fix_freq / 1000 + 1;
+        FD_ZERO(&set);
+        FD_ZERO(&empty);
+        FD_SET(gps_fd, &set);
+        rc = select(gps_fd+1, &set, &empty, &empty, &tv);
+
+        pthread_mutex_lock(&thread_mutex);
+        if (thread_running != 1)
+            goto restart;
+        pthread_mutex_unlock(&thread_mutex);
+
+        if (!rc) {
+            /* fix_freq has elapsed with no data from the GPS.  better tell it
+             * explicitly that we want a new fix */
+            ioctl(gps_fd, VGPS_IOC_NEW_FIX);
             continue;
+        }
 
-        system("echo thread >> /tmp/gps");
+        system("echo thread 1 >> /tmp/gps");
 
-        writesys("/sys/class/gps/enable", "2");
+        do {
+            rc = read(gps_fd, &data, sizeof(struct gps_state));
+        } while (rc < 0 && errno == EINTR);
+        assert(rc == 0);
 
-        pos = fopen("/sys/class/gps/position", "r");
-        fscanf(pos, "%d %d", &lat, &lng);
-        fclose(pos);
+        system("echo thread 2 >> /tmp/gps");
 
-        if (lat == 0 && lng == 0)
-            continue;
-
-        system("echo lock > /tmp/gps");
-
-        memset(&location, 0, sizeof(location));
-        location.flags |= GPS_LOCATION_HAS_LAT_LONG;
-        location.latitude = (double)lat / (double)180000;
-        location.longitude = (double)lng / (double)180000;
-
-        vogue_callbacks.location_cb(&location);
+        send_signal_data(data);
+        send_position_data(data);
     }
     
     return NULL;
@@ -59,36 +128,60 @@ static void *vogue_gps_thread (void *arg)
 
 static int vogue_gps_init (GpsCallbacks *callbacks)
 {
+    pthread_mutexattr_t attr;
+
     system("echo init >> /tmp/gps");
     memcpy(&vogue_callbacks, callbacks, sizeof(GpsCallbacks));
+    gps_fd = open(VOGUE_GPS_DEVICE, O_RDWR);
+    if (gps_fd < 0) {
+        perror("open");
+        return -errno;
+    }
+
+    pthread_mutexattr_init(&attr);
+    pthread_mutex_init(&thread_mutex, &attr);
+    pthread_cond_init(&thread_wq, NULL);
     pthread_create(&gps_thread, NULL, vogue_gps_thread, NULL);
+
     return 0;
 }
 
 static int vogue_gps_start (void)
 {
-    writesys("/sys/class/gps/enable", "1");
     system("echo start >> /tmp/gps");
+    ioctl(gps_fd, VGPS_IOC_ENABLE);
+
+    pthread_mutex_lock(&thread_mutex);
     thread_running = 1;
+    pthread_cond_broadcast(&thread_wq);
+    pthread_mutex_unlock(&thread_mutex);
     return 0;
 }
 
 static int vogue_gps_stop (void)
 {
     if (thread_running) {
+        pthread_mutex_lock(&thread_mutex);
         thread_running = 0;
+        pthread_mutex_unlock(&thread_mutex);
+
+        ioctl(gps_fd, VGPS_IOC_DISABLE);
     }
-    writesys("/sys/class/gps/enable", "0");
     return 0;
 }
 
 static void vogue_gps_set_freq (int freq)
 {
-    (void)freq;
+    fix_freq = freq;
 }
 
 static void vogue_gps_cleanup (void)
 {
+    vogue_gps_stop();
+    pthread_mutex_lock(&thread_mutex);
+    thread_running = 2;
+    pthread_cond_broadcast(&thread_wq);
+    pthread_mutex_unlock(&thread_mutex);
 }
 
 static int vogue_gps_inject (GpsUtcTime time, int64_t time_ref, int uncert)
