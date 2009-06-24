@@ -35,8 +35,6 @@ static void send_signal_data (struct gps_state data)
     GpsSvStatus sv_info;
     int i;
 
-    send_status(GPS_STATUS_SESSION_BEGIN);
-
     sv_info.num_svs = 0;
     for (i=0; i<MAX_SATELLITES; i++) {
         if (!data.sat_state[i].sat_no)
@@ -202,7 +200,7 @@ static int vogue_gps_start (void)
         if (rc < 0)
             return rc;
 
-        send_status(GPS_STATUS_ENGINE_ON);
+        send_status(GPS_STATUS_SESSION_BEGIN);
 
         system("echo start 1 >> /tmp/gps");
         pthread_mutex_lock(&thread_mutex);
