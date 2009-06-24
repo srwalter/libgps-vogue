@@ -22,14 +22,20 @@ static int thread_running;
 static pthread_cond_t thread_wq;
 static int fix_freq = 60000;
 
-static void send_signal_data (struct gps_state data)
+static void send_status (GpsStatusValue sv)
 {
     GpsStatus status;
+
+    status.status = sv;
+    vogue_callbacks.status_cb(&status);
+}
+
+static void send_signal_data (struct gps_state data)
+{
     GpsSvStatus sv_info;
     int i;
 
-    status.status = GPS_STATUS_SESSION_BEGIN;
-    vogue_callbacks.status_cb(&status);
+    send_status(GPS_STATUS_SESSION_BEGIN);
 
     sv_info.num_svs = 0;
     for (i=0; i<MAX_SATELLITES; i++) {
@@ -56,20 +62,20 @@ static void send_position_data (struct gps_state data)
     if (data.lat == last_lat && data.lng == last_lng)
         return;
 
-
     last_lat = data.lat;
     last_lng = data.lng;
 
     memset(&location, 0, sizeof(location));
     location.flags |= GPS_LOCATION_HAS_LAT_LONG;
-    location.latitude = (double)data.lat / 180000.0;
-    location.latitude /= 1.0356; /* correction factor? */
-    location.longitude = (double)data.lng / 180000.0;
-    location.longitude /= 1.0356; /* correction factor? */
+    location.latitude = ((double)data.lat) / 180000.0;
+    location.latitude /= 1.035629;
+    location.longitude = ((double)data.lng) / 180000.0;
+    location.longitude /= 1.035629; /* correction factor? */
 
     system("echo lock >> /tmp/gps");
-    snprintf(cmd, 256, "echo coords %g %g >> /tmp/gps", location.latitude,
-        location.longitude);
+    snprintf(cmd, 256, "echo coords %10g %10g >> /tmp/gps", location.latitude,
+            location.longitude);
+    snprintf(cmd, 256, "echo coords %d %d >> /tmp/gps", last_lat, last_lng);
     system(cmd);
 
     vogue_callbacks.location_cb(&location);
@@ -196,6 +202,8 @@ static int vogue_gps_start (void)
         if (rc < 0)
             return rc;
 
+        send_status(GPS_STATUS_ENGINE_ON);
+
         system("echo start 1 >> /tmp/gps");
         pthread_mutex_lock(&thread_mutex);
         thread_running = 1;
@@ -213,6 +221,7 @@ static int vogue_gps_stop (void)
         pthread_mutex_unlock(&thread_mutex);
 
         ioctl(gps_fd, VGPS_IOC_DISABLE);
+        send_status(GPS_STATUS_ENGINE_OFF);
     }
     return 0;
 }
