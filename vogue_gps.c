@@ -47,15 +47,15 @@ static void send_signal_data (struct gps_state data)
 
 static void send_position_data (struct gps_state data)
 {
-    static uint32_t last_lat, last_lng;
+    static int32_t last_lat, last_lng;
     GpsLocation location;
+    char cmd[256];
 
     /* If the position hasn't changed, the kernel was probably just alerting us
      * to new signal data */
     if (data.lat == last_lat && data.lng == last_lng)
         return;
 
-    system("echo lock >> /tmp/gps");
 
     last_lat = data.lat;
     last_lng = data.lng;
@@ -63,7 +63,14 @@ static void send_position_data (struct gps_state data)
     memset(&location, 0, sizeof(location));
     location.flags |= GPS_LOCATION_HAS_LAT_LONG;
     location.latitude = (double)data.lat / 180000.0;
+    location.latitude /= 1.0356; /* correction factor? */
     location.longitude = (double)data.lng / 180000.0;
+    location.longitude /= 1.0356; /* correction factor? */
+
+    system("echo lock >> /tmp/gps");
+    snprintf(cmd, 256, "echo coords %g %g >> /tmp/gps", location.latitude,
+        location.longitude);
+    system(cmd);
 
     vogue_callbacks.location_cb(&location);
 }

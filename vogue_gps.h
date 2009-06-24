@@ -12,8 +12,8 @@ struct gps_sat_state {
 #define MAX_SATELLITES 32
 
 struct gps_state {
-    uint32_t lat;
-    uint32_t lng;
+    int32_t lat;
+    int32_t lng;
     uint32_t time;
     struct gps_sat_state sat_state[MAX_SATELLITES];
 };
