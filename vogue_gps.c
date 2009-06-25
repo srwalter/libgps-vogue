@@ -49,19 +49,18 @@ static void send_signal_data (struct gps_state data)
     vogue_callbacks.sv_status_cb(&sv_info);
 }
 
-static void send_position_data (struct gps_state data)
+static int send_position_data (struct gps_state data)
 {
-    static int32_t last_lat, last_lng;
+    static uint32_t last_fix;
     GpsLocation location;
     char cmd[256];
 
-    /* If the position hasn't changed, the kernel was probably just alerting us
-     * to new signal data */
-    if (data.lat == last_lat && data.lng == last_lng)
-        return;
+    /* If the fix time hasn't changed, the kernel was probably just
+     * alerting us to new signal data */
+    if (data.time == last_fix)
+        return 0;
 
-    last_lat = data.lat;
-    last_lng = data.lng;
+    last_fix = data.time;
 
     memset(&location, 0, sizeof(location));
     location.flags |= GPS_LOCATION_HAS_LAT_LONG;
@@ -69,19 +68,29 @@ static void send_position_data (struct gps_state data)
     location.latitude /= 1.035631;
     location.longitude = ((double)data.lng) / 180000.0;
     location.longitude /= 1.035631; /* correction factor? */
+    location.timestamp = data.time;
 
     system("echo lock >> /tmp/gps");
     snprintf(cmd, 256, "echo coords %10g %10g >> /tmp/gps", location.latitude,
             location.longitude);
-    snprintf(cmd, 256, "echo coords %d %d >> /tmp/gps", last_lat, last_lng);
     system(cmd);
 
     vogue_callbacks.location_cb(&location);
+    return 1;
+}
+
+static int get_next_fix (void)
+{
+    int next_fix = fix_freq - 1000;
+    if (next_fix < 2000)
+        next_fix = 2000;
+    return next_fix;
 }
 
 static void *vogue_gps_thread (void *arg)
 {
     (void)arg;
+    int msec_to_next_fix = get_next_fix();
 
     system("echo thread 1 >> /tmp/gps");
 
@@ -107,10 +116,6 @@ restart:
         struct timeval select_tv, before_tv, after_tv;
         fd_set set, empty;
         int rc;
-        int msec_to_next_fix = fix_freq / 2;
-
-        if (msec_to_next_fix < 2000)
-            msec_to_next_fix = 2000;
 
         do {
             int msec_elapsed;
@@ -133,6 +138,9 @@ restart:
             msec_elapsed += (after_tv.tv_usec - before_tv.tv_usec) / 1000;
             msec_to_next_fix -= msec_elapsed;
 
+            if (msec_to_next_fix < 0)
+                msec_to_next_fix = 0;
+
             pthread_mutex_lock(&thread_mutex);
             if (thread_running != 1)
                 goto restart;
@@ -150,6 +158,7 @@ restart:
              * explicitly that we want a new fix */
             system("echo select timeout >> /tmp/gps");
             ioctl(gps_fd, VGPS_IOC_NEW_FIX);
+            msec_to_next_fix = get_next_fix();
             continue;
         }
 
@@ -167,7 +176,12 @@ restart:
         system("echo thread 7 >> /tmp/gps");
 
         send_signal_data(data);
-        send_position_data(data);
+        rc = send_position_data(data);
+
+        if (rc) {
+            /* We sent new position data, so reset the timer */
+            msec_to_next_fix = get_next_fix();
+        }
 
         /* fix frequency of zero means "one-shot mode" */
         if (!fix_freq) {
