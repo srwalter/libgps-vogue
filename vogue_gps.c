@@ -66,9 +66,9 @@ static void send_position_data (struct gps_state data)
     memset(&location, 0, sizeof(location));
     location.flags |= GPS_LOCATION_HAS_LAT_LONG;
     location.latitude = ((double)data.lat) / 180000.0;
-    location.latitude /= 1.035629;
+    location.latitude /= 1.035631;
     location.longitude = ((double)data.lng) / 180000.0;
-    location.longitude /= 1.035629; /* correction factor? */
+    location.longitude /= 1.035631; /* correction factor? */
 
     system("echo lock >> /tmp/gps");
     snprintf(cmd, 256, "echo coords %10g %10g >> /tmp/gps", location.latitude,
