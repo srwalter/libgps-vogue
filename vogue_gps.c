@@ -168,6 +168,12 @@ restart:
 
         send_signal_data(data);
         send_position_data(data);
+
+        /* fix frequency of zero means "one-shot mode" */
+        if (!fix_freq) {
+            thread_running=0;
+            goto restart;
+        }
     }
     
     return NULL;
@@ -193,6 +199,16 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
     return 0;
 }
 
+static void start_thread(void)
+{
+    if (!thread_running) {
+        pthread_mutex_lock(&thread_mutex);
+        thread_running = 1;
+        pthread_cond_broadcast(&thread_wq);
+        pthread_mutex_unlock(&thread_mutex);
+    }
+}
+
 static int vogue_gps_start (void)
 {
     int rc;
@@ -206,24 +222,21 @@ static int vogue_gps_start (void)
         send_status(GPS_STATUS_SESSION_BEGIN);
 
         system("echo start 1 >> /tmp/gps");
-        pthread_mutex_lock(&thread_mutex);
-        thread_running = 1;
-        pthread_cond_broadcast(&thread_wq);
-        pthread_mutex_unlock(&thread_mutex);
+        start_thread();
     }
     return 0;
 }
 
 static int vogue_gps_stop (void)
 {
+    system("echo stop >> /tmp/gps");
     if (thread_running) {
         pthread_mutex_lock(&thread_mutex);
         thread_running = 0;
         pthread_mutex_unlock(&thread_mutex);
-
-        ioctl(gps_fd, VGPS_IOC_DISABLE);
-        send_status(GPS_STATUS_ENGINE_OFF);
     }
+    ioctl(gps_fd, VGPS_IOC_DISABLE);
+    send_status(GPS_STATUS_ENGINE_OFF);
     return 0;
 }
 
