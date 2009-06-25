@@ -271,6 +271,8 @@ static void vogue_gps_aids (GpsAidingData flags)
 
 static int vogue_gps_set_mode (GpsPositionMode mode, int freq)
 {
+    system("echo set_mode >> /tmp/gps");
+    fix_freq = freq;
     return 0;
 }
 
