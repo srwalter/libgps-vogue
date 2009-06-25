@@ -107,7 +107,10 @@ restart:
         struct timeval select_tv, before_tv, after_tv;
         fd_set set, empty;
         int rc;
-        int msec_to_next_fix = fix_freq;
+        int msec_to_next_fix = fix_freq / 2;
+
+        if (msec_to_next_fix < 2000)
+            msec_to_next_fix = 2000;
 
         do {
             int msec_elapsed;
@@ -226,8 +229,7 @@ static int vogue_gps_stop (void)
 
 static void vogue_gps_set_freq (int freq)
 {
-    if (freq < 10000)
-        freq = 10000;
+    system("echo set_freq >> /tmp/gps");
     fix_freq = freq;
 }
 
