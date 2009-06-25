@@ -194,6 +194,7 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
     pthread_mutexattr_init(&attr);
     pthread_mutex_init(&thread_mutex, &attr);
     pthread_cond_init(&thread_wq, NULL);
+    thread_running = 0;
     pthread_create(&gps_thread, NULL, vogue_gps_thread, NULL);
 
     return 0;
