@@ -196,6 +196,8 @@ restart:
 static int vogue_gps_init (GpsCallbacks *callbacks)
 {
     pthread_mutexattr_t attr;
+    int rc;
+    struct gps_info info;
 
     system("echo init >> /tmp/gps");
     memcpy(&vogue_callbacks, callbacks, sizeof(GpsCallbacks));
@@ -203,6 +205,17 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
     if (gps_fd < 0) {
         perror("open");
         return -errno;
+    }
+
+    rc = ioctl(gps_fd, VGPS_IOC_INFO, &info);
+    if (rc < 0) {
+        perror("ioctl");
+        return -errno;
+    }
+
+    if (info.version != GPS_VERSION) {
+        fprintf(stderr, "wrong GPS version");
+        return -1;
     }
 
     pthread_mutexattr_init(&attr);
