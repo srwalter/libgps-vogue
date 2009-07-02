@@ -16,6 +16,7 @@
 static GpsCallbacks vogue_callbacks;
 static pthread_t gps_thread;
 int gps_fd;
+double correction_factor;
 
 static pthread_mutex_t thread_mutex;
 static int thread_running;
@@ -65,9 +66,9 @@ static int send_position_data (struct gps_state data)
     memset(&location, 0, sizeof(location));
     location.flags |= GPS_LOCATION_HAS_LAT_LONG;
     location.latitude = ((double)data.lat) / 180000.0;
-    location.latitude /= 1.035631;
+    location.latitude /= correction_factor;
     location.longitude = ((double)data.lng) / 180000.0;
-    location.longitude /= 1.035631; /* correction factor? */
+    location.longitude /= correction_factor;
     location.timestamp = data.time;
 
     system("echo lock >> /tmp/gps");
@@ -217,6 +218,7 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
         fprintf(stderr, "wrong GPS version");
         return -1;
     }
+    correction_factor = info.correction_factor;
 
     pthread_mutexattr_init(&attr);
     pthread_mutex_init(&thread_mutex, &attr);
