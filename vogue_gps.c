@@ -102,12 +102,19 @@ static void *vogue_gps_thread (void *arg)
 {
     (void)arg;
     int msec_to_next_fix = get_next_fix();
+#ifdef DEBUG
+    char cmd[256];
+
+    snprintf(cmd, sizeof(cmd), "echo thread pid %d >> /sdcard/gps", getpid());
+    system(cmd);
+#endif
 
     GPS_LOG("echo thread 1 >> /sdcard/gps");
 
     /* Wait until we're signalled to start */
     pthread_mutex_lock(&thread_mutex);
 restart:
+    GPS_LOG("echo thread 1a >> /sdcard/gps");
     while (!thread_running) {
         pthread_cond_wait(&thread_wq, &thread_mutex);
     }
@@ -219,12 +226,14 @@ static int core_init()
         return -errno;
     }
 
+    GPS_LOG("echo ioctl >> /sdcard/gps");
     rc = ioctl(gps_fd, VGPS_IOC_INFO, &info);
     if (rc < 0) {
         perror("ioctl");
         return -errno;
     }
 
+    GPS_LOG("echo version >> /sdcard/gps");
     if (info.version != GPS_VERSION) {
         fprintf(stderr, "wrong GPS version");
         return -1;
@@ -267,6 +276,7 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
 static void start_thread(void)
 {
     if (!thread_running) {
+        GPS_LOG("echo thread not running >> /sdcard/gps");
         pthread_mutex_lock(&thread_mutex);
         thread_running = 1;
         pthread_cond_broadcast(&thread_wq);
@@ -286,6 +296,7 @@ static int vogue_gps_start (void)
 
     GPS_LOG("echo start >> /sdcard/gps");
     if (!thread_running) {
+        GPS_LOG("echo need start >> /sdcard/gps");
         rc = ioctl(gps_fd, VGPS_IOC_ENABLE);
         if (rc < 0)
             return rc;
@@ -319,6 +330,7 @@ static void vogue_gps_set_freq (int freq)
 
 static void vogue_gps_cleanup (void)
 {
+    GPS_LOG("echo cleanup >> /sdcard/gps");
     vogue_gps_stop();
 #if 0
     pthread_mutex_lock(&thread_mutex);
