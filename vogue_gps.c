@@ -306,11 +306,13 @@ static void vogue_gps_set_freq (int freq)
 static void vogue_gps_cleanup (void)
 {
     vogue_gps_stop();
+#if 0
     pthread_mutex_lock(&thread_mutex);
     thread_running = 2;
     pthread_cond_broadcast(&thread_wq);
     pthread_mutex_unlock(&thread_mutex);
     close(gps_fd);
+#endif
 }
 
 static int vogue_gps_inject (GpsUtcTime time, int64_t time_ref, int uncert)
