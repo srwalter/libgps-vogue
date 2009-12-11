@@ -52,7 +52,7 @@ static void send_signal_data (struct gps_state data)
         sv_info.num_svs++;
         sv_info.sv_list[i].prn = data.sat_state[i].sat_no;
         sv_info.sv_list[i].snr
-            = (double)data.sat_state[i].signal_strength / 256.0;
+            = data.sat_state[i].signal_strength;
     }
 
     vogue_callbacks.sv_status_cb(&sv_info);
