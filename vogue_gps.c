@@ -13,6 +13,14 @@
 
 #define VOGUE_GPS_DEVICE "/dev/vogue_gps"
 
+#undef DEBUG
+
+#ifdef DEBUG
+# define GPS_LOG system
+#else
+# define GPS_LOG(...) do { } while (0);
+#endif
+
 static GpsCallbacks vogue_callbacks;
 static pthread_t gps_thread;
 int gps_fd;
@@ -71,10 +79,12 @@ static int send_position_data (struct gps_state data)
     location.longitude /= correction_factor;
     location.timestamp = data.time;
 
-    system("echo lock >> /tmp/gps");
-    snprintf(cmd, 256, "echo coords %10g %10g >> /tmp/gps", location.latitude,
+    GPS_LOG("echo lock >> /sdcard/gps");
+#ifdef DEBUG
+    snprintf(cmd, 256, "echo coords %10g %10g >> /sdcard/gps", location.latitude,
             location.longitude);
     system(cmd);
+#endif
 
     vogue_callbacks.location_cb(&location);
     return 1;
@@ -93,7 +103,7 @@ static void *vogue_gps_thread (void *arg)
     (void)arg;
     int msec_to_next_fix = get_next_fix();
 
-    system("echo thread 1 >> /tmp/gps");
+    GPS_LOG("echo thread 1 >> /sdcard/gps");
 
     /* Wait until we're signalled to start */
     pthread_mutex_lock(&thread_mutex);
@@ -101,7 +111,7 @@ restart:
     while (!thread_running) {
         pthread_cond_wait(&thread_wq, &thread_mutex);
     }
-    system("echo thread 2 >> /tmp/gps");
+    GPS_LOG("echo thread 2 >> /sdcard/gps");
 
     /* 2 means we should quit */
     if (thread_running == 2) {
@@ -110,7 +120,7 @@ restart:
     }
     pthread_mutex_unlock(&thread_mutex);
 
-    system("echo thread 3 >> /tmp/gps");
+    GPS_LOG("echo thread 3 >> /sdcard/gps");
 
     for (;;) {
         struct gps_state data;
@@ -149,7 +159,7 @@ restart:
         } while (rc < 0 && errno == EINTR);
 
         if (rc < 0) {
-            system("echo select error >> /tmp/gps");
+            GPS_LOG("echo select error >> /sdcard/gps");
             perror("select");
             continue;
         }
@@ -157,24 +167,24 @@ restart:
         if (!rc) {
             /* fix_freq has elapsed with no data from the GPS.  better tell it
              * explicitly that we want a new fix */
-            system("echo select timeout >> /tmp/gps");
+            GPS_LOG("echo select timeout >> /sdcard/gps");
             ioctl(gps_fd, VGPS_IOC_NEW_FIX);
             msec_to_next_fix = get_next_fix();
             continue;
         }
 
-        system("echo thread 6 >> /tmp/gps");
+        GPS_LOG("echo thread 6 >> /sdcard/gps");
 
         do {
             rc = read(gps_fd, &data, sizeof(struct gps_state));
         } while (rc < 0 && errno == EINTR);
 
         if (rc < 0) {
-            system("echo read error >> /tmp/gps");
+            GPS_LOG("echo read error >> /sdcard/gps");
             perror("read");
         }
 
-        system("echo thread 7 >> /tmp/gps");
+        GPS_LOG("echo thread 7 >> /sdcard/gps");
 
         send_signal_data(data);
         rc = send_position_data(data);
@@ -233,7 +243,9 @@ static int core_init()
 static int vogue_gps_init (GpsCallbacks *callbacks)
 {
     int rc;
+#ifdef DEBUG
     char cmd[256];
+#endif
 
     if (need_init) {
         rc = core_init();
@@ -241,12 +253,14 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
             return rc;
     }
 
-    system("echo init >> /sdcard/gps");
+    GPS_LOG("echo init >> /sdcard/gps");
+#ifdef DEBUG
     snprintf(cmd, sizeof(cmd), "echo %d >> /sdcard/gps", getpid());
     system(cmd);
+#endif
     memcpy(&vogue_callbacks, callbacks, sizeof(GpsCallbacks));
 
-    system("echo done >> /sdcard/gps");
+    GPS_LOG("echo done >> /sdcard/gps");
     return 0;
 }
 
@@ -270,7 +284,7 @@ static int vogue_gps_start (void)
             return rc;
     }
 
-    system("echo start >> /sdcard/gps");
+    GPS_LOG("echo start >> /sdcard/gps");
     if (!thread_running) {
         rc = ioctl(gps_fd, VGPS_IOC_ENABLE);
         if (rc < 0)
@@ -278,7 +292,7 @@ static int vogue_gps_start (void)
 
         send_status(GPS_STATUS_SESSION_BEGIN);
 
-        system("echo start 1 >> /tmp/gps");
+        GPS_LOG("echo start 1 >> /sdcard/gps");
         start_thread();
     }
     return 0;
@@ -286,7 +300,7 @@ static int vogue_gps_start (void)
 
 static int vogue_gps_stop (void)
 {
-    system("echo stop >> /tmp/gps");
+    GPS_LOG("echo stop >> /sdcard/gps");
     if (thread_running) {
         pthread_mutex_lock(&thread_mutex);
         thread_running = 0;
@@ -299,7 +313,7 @@ static int vogue_gps_stop (void)
 
 static void vogue_gps_set_freq (int freq)
 {
-    system("echo set_freq >> /tmp/gps");
+    GPS_LOG("echo set_freq >> /sdcard/gps");
     fix_freq = freq;
 }
 
@@ -330,7 +344,7 @@ static void vogue_gps_aids (GpsAidingData flags)
 
 static int vogue_gps_set_mode (GpsPositionMode mode, int freq)
 {
-    system("echo set_mode >> /tmp/gps");
+    GPS_LOG("echo set_mode >> /sdcard/gps");
     fix_freq = freq;
     return 0;
 }
@@ -355,6 +369,5 @@ GpsInterface vogue_gps_iface = {
 
 const GpsInterface* gps_get_hardware_interface()
 {
-    system("touch /tmp/ghi");
     return &vogue_gps_iface;
 }
