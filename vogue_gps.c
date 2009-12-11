@@ -194,14 +194,15 @@ restart:
     return NULL;
 }
 
-static int vogue_gps_init (GpsCallbacks *callbacks)
+static int need_init=1;
+
+static int core_init()
 {
-    pthread_mutexattr_t attr;
+    need_init = 0;
     int rc;
     struct gps_info info;
+    pthread_mutexattr_t attr;
 
-    system("echo init >> /tmp/gps");
-    memcpy(&vogue_callbacks, callbacks, sizeof(GpsCallbacks));
     gps_fd = open(VOGUE_GPS_DEVICE, O_RDWR);
     if (gps_fd < 0) {
         perror("open");
@@ -229,6 +230,26 @@ static int vogue_gps_init (GpsCallbacks *callbacks)
     return 0;
 }
 
+static int vogue_gps_init (GpsCallbacks *callbacks)
+{
+    int rc;
+    char cmd[256];
+
+    if (need_init) {
+        rc = core_init();
+        if (rc)
+            return rc;
+    }
+
+    system("echo init >> /sdcard/gps");
+    snprintf(cmd, sizeof(cmd), "echo %d >> /sdcard/gps", getpid());
+    system(cmd);
+    memcpy(&vogue_callbacks, callbacks, sizeof(GpsCallbacks));
+
+    system("echo done >> /sdcard/gps");
+    return 0;
+}
+
 static void start_thread(void)
 {
     if (!thread_running) {
@@ -243,7 +264,13 @@ static int vogue_gps_start (void)
 {
     int rc;
 
-    system("echo start >> /tmp/gps");
+    if (need_init) {
+        rc = core_init();
+        if (rc)
+            return rc;
+    }
+
+    system("echo start >> /sdcard/gps");
     if (!thread_running) {
         rc = ioctl(gps_fd, VGPS_IOC_ENABLE);
         if (rc < 0)
