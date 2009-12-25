@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <assert.h>
+#include <math.h>
 #include "gps.h"
 #include "vogue_gps.h"
 
@@ -61,6 +62,9 @@ static void send_signal_data (struct gps_state data)
 static int send_position_data (struct gps_state data)
 {
     static uint32_t last_fix;
+    static double last_lat, last_lon;
+    float position_delta;
+    uint32_t time_delta;
     GpsLocation location;
     char cmd[256];
 
@@ -69,14 +73,54 @@ static int send_position_data (struct gps_state data)
     if (data.time == last_fix)
         return 0;
 
+    time_delta = data.time - last_fix;
     last_fix = data.time;
 
     memset(&location, 0, sizeof(location));
     location.flags |= GPS_LOCATION_HAS_LAT_LONG;
+    location.flags |= GPS_LOCATION_HAS_ACCURACY;
     location.latitude = ((double)data.lat) / 180000.0;
     location.latitude /= correction_factor;
     location.longitude = ((double)data.lng) / 180000.0;
     location.longitude /= correction_factor;
+
+    /* Compute speed and bearing */
+    if (last_lat && last_lon) {
+        position_delta = location.latitude - last_lat;
+        position_delta *= position_delta;
+        position_delta += (location.longitude - last_lon) *
+            (location.longitude - last_lon);
+        position_delta = sqrt(position_delta);
+        /* Nautical miles per second */
+        location.speed = 60 * position_delta / time_delta;
+        /* Convert to meters per second (assuming near sea level) */
+        location.speed *= 1853.0;
+        location.flags |= GPS_LOCATION_HAS_SPEED;
+
+        location.bearing = fabs(location.latitude - last_lat) / 
+            fabs(location.longitude - last_lon);
+        location.bearing = atan(location.bearing) * 360 / (6.282);
+
+        if ((location.latitude - last_lat) < 0) {
+            if ((location.longitude - last_lon) < 0) {
+                location.bearing += 180.0;
+            } else {
+                location.bearing += 90.0;
+            }
+        } else {
+            location.bearing += 270.0;
+        }
+        location.flags |= GPS_LOCATION_HAS_BEARING;
+#ifdef DEBUG
+        snprintf(cmd, 256, "echo speed %10g bearing %10g >> /sdcard/gps",
+                 location.speed, location.bearing);
+        system(cmd);
+#endif
+    }
+
+    last_lat = location.latitude;
+    last_lon = location.longitude;
+    location.accuracy = 3.0;
     location.timestamp = data.time;
 
     GPS_LOG("echo lock >> /sdcard/gps");
