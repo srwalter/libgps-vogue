@@ -14,7 +14,7 @@
 
 #define VOGUE_GPS_DEVICE "/dev/vogue_gps"
 
-#undef DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 # define GPS_LOG system
@@ -97,9 +97,13 @@ static int send_position_data (struct gps_state data)
         location.speed *= 1853.0;
         location.flags |= GPS_LOCATION_HAS_SPEED;
 
-        location.bearing = fabs(location.latitude - last_lat) / 
-            fabs(location.longitude - last_lon);
-        location.bearing = atan(location.bearing) * 360 / (6.282);
+        if (location.longitude != last_lon) {
+            location.bearing = fabs(location.latitude - last_lat) / 
+                fabs(location.longitude - last_lon);
+            location.bearing = atan(location.bearing) * 360 / (6.282);
+        } else {
+            location.bearing = 0.0;
+        }
 
         if ((location.latitude - last_lat) < 0) {
             if ((location.longitude - last_lon) < 0) {
@@ -107,9 +111,11 @@ static int send_position_data (struct gps_state data)
             } else {
                 location.bearing += 90.0;
             }
-        } else {
+        } else if ((location.longitude - last_lon) < 0) {
             location.bearing += 270.0;
         }
+        if (location.bearing >= 360.0)
+            location.bearing -= 360.0;
         location.flags |= GPS_LOCATION_HAS_BEARING;
 #ifdef DEBUG
         snprintf(cmd, 256, "echo speed %10g bearing %10g >> /sdcard/gps",
